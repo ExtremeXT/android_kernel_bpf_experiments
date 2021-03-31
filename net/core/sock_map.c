@@ -162,6 +162,8 @@ static void sock_map_del_link(struct sock *sk,
 				strp_stop = true;
 			if (psock->parser.enabled && stab->progs.skb_verdict)
 				verdict_stop = true;
+			if (psock->saved_data_ready && stab->progs.skb_verdict)
+				verdict_stop = true;
 			list_del(&link->list);
 			sk_psock_free_link(link);
 			break;
@@ -304,6 +306,9 @@ static int sock_map_link(struct bpf_map *map, struct sk_psock_progs *progs,
 	} else if (!skb_parser && skb_verdict && !psock->parser.enabled) {
 		psock_set_prog(&psock->progs.skb_verdict, skb_verdict);
 		sk_psock_start_verdict(sk,psock);
+	} else if (!stream_verdict && skb_verdict && !psock->saved_data_ready) {
+		psock_set_prog(&psock->progs.skb_verdict, skb_verdict);
+		sk_psock_start_verdict(sk, psock);
 	}
 	write_unlock_bh(&sk->sk_callback_lock);
 	return 0;
@@ -312,6 +317,9 @@ out_unlock_drop:
 out_drop:
 	sk_psock_put(sk, psock);
 out_progs:
+	if (skb_verdict)
+		bpf_prog_put(skb_verdict);
+out_put_msg_parser:
 	if (msg_parser)
 		bpf_prog_put(msg_parser);
 out_put_skb_parser:
@@ -1515,6 +1523,11 @@ static int sock_map_prog_update(struct bpf_map *map, struct bpf_prog *prog,
 		break;
 #endif
 	case BPF_SK_SKB_STREAM_VERDICT:
+		pprog = &progs->skb_verdict;
+		break;
+	case BPF_SK_SKB_VERDICT:
+		if (progs->stream_verdict)
+			return -EBUSY;
 		pprog = &progs->skb_verdict;
 		break;
 	default:
